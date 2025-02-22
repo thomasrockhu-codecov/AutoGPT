@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -17,6 +18,7 @@ from typing import (
 )
 from uuid import uuid4
 
+from prisma.enums import CreditTransactionType
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -370,3 +372,33 @@ class AutoTopUpConfig(BaseModel):
     """Amount of credits to top up."""
     threshold: int
     """Threshold to trigger auto top up."""
+
+
+class UserTransaction(BaseModel):
+    transaction_key: str = ""
+    transaction_time: datetime = datetime.min.replace(tzinfo=timezone.utc)
+    transaction_type: CreditTransactionType = CreditTransactionType.USAGE
+    amount: int = 0
+    balance: int = 0
+    description: str | None = None
+    usage_graph_id: str | None = None
+    usage_execution_id: str | None = None
+    usage_node_count: int = 0
+    usage_start_time: datetime = datetime.max.replace(tzinfo=timezone.utc)
+
+
+class TransactionHistory(BaseModel):
+    transactions: list[UserTransaction]
+    next_transaction_time: datetime | None
+
+
+class RefundRequest(BaseModel):
+    id: str
+    user_id: str
+    transaction_key: str
+    amount: int
+    reason: str
+    result: str | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime

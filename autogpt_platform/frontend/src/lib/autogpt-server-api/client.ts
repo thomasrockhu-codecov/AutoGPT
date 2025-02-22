@@ -2,37 +2,42 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import {
   AnalyticsDetails,
   AnalyticsMetrics,
+  APIKey,
   APIKeyCredentials,
+  APIKeyPermission,
   Block,
+  CreatorsResponse,
+  CreatorDetails,
+  CreateAPIKeyResponse,
+  Credentials,
   CredentialsDeleteNeedConfirmationResponse,
   CredentialsDeleteResponse,
   CredentialsMetaResponse,
   GraphExecution,
+  GraphExecutionMeta,
   Graph,
   GraphCreatable,
-  GraphExecuteResponse,
   GraphMeta,
   GraphUpdateable,
-  NodeExecutionResult,
+  LibraryAgent,
   MyAgentsResponse,
+  NodeExecutionResult,
   ProfileDetails,
-  User,
+  Schedule,
+  ScheduleCreatable,
   StoreAgentsResponse,
   StoreAgentDetails,
-  CreatorsResponse,
-  CreatorDetails,
   StoreSubmissionsResponse,
   StoreSubmissionRequest,
   StoreSubmission,
   StoreReviewCreate,
   StoreReview,
-  ScheduleCreatable,
-  Schedule,
+  TransactionHistory,
+  User,
+  NotificationPreferenceDTO,
   UserPasswordCredentials,
-  Credentials,
-  APIKeyPermission,
-  CreateAPIKeyResponse,
-  APIKey,
+  NotificationPreference,
+  RefundRequest,
 } from "./types";
 import { createBrowserClient } from "@supabase/ssr";
 import getServerSupabase from "../supabase/getServerSupabase";
@@ -81,12 +86,26 @@ export default class BackendAPI {
     return this._request("POST", "/auth/user", {});
   }
 
+  updateUserEmail(email: string): Promise<{ email: string }> {
+    return this._request("POST", "/auth/user/email", { email });
+  }
+
   getUserCredit(page?: string): Promise<{ credits: number }> {
     try {
       return this._get(`/credits`, undefined, page);
     } catch (error) {
       return Promise.resolve({ credits: 0 });
     }
+  }
+
+  getUserPreferences(): Promise<NotificationPreferenceDTO> {
+    return this._get("/auth/user/preferences");
+  }
+
+  updateUserPreferences(
+    preferences: NotificationPreferenceDTO,
+  ): Promise<NotificationPreference> {
+    return this._request("POST", "/auth/user/preferences", preferences);
   }
 
   getAutoTopUpConfig(): Promise<{ amount: number; threshold: number }> {
@@ -100,8 +119,30 @@ export default class BackendAPI {
     return this._request("POST", "/credits/auto-top-up", config);
   }
 
-  requestTopUp(amount: number): Promise<{ checkout_url: string }> {
-    return this._request("POST", "/credits", { amount });
+  getTransactionHistory(
+    lastTransction: Date | null = null,
+    countLimit: number | null = null,
+    transactionType: string | null = null,
+  ): Promise<TransactionHistory> {
+    const filters: Record<string, any> = {};
+    if (lastTransction) filters.transaction_time = lastTransction;
+    if (countLimit) filters.transaction_count_limit = countLimit;
+    if (transactionType) filters.transaction_type = transactionType;
+    return this._get(`/credits/transactions`, filters);
+  }
+
+  getRefundRequests(): Promise<RefundRequest[]> {
+    return this._get(`/credits/refunds`);
+  }
+
+  requestTopUp(credit_amount: number): Promise<{ checkout_url: string }> {
+    return this._request("POST", "/credits", { credit_amount });
+  }
+
+  refundTopUp(transaction_key: string, reason: string): Promise<number> {
+    return this._request("POST", `/credits/${transaction_key}/refund`, {
+      reason,
+    });
   }
 
   getUserPaymentPortalLink(): Promise<{ url: string }> {
@@ -118,10 +159,6 @@ export default class BackendAPI {
 
   listGraphs(): Promise<GraphMeta[]> {
     return this._get(`/graphs`);
-  }
-
-  getExecutions(): Promise<GraphExecution[]> {
-    return this._get(`/executions`);
   }
 
   getGraph(
@@ -143,10 +180,8 @@ export default class BackendAPI {
     return this._get(`/graphs/${id}/versions`);
   }
 
-  createGraph(graphCreateBody: GraphCreatable): Promise<Graph>;
-
-  createGraph(graphID: GraphCreatable | string): Promise<Graph> {
-    let requestBody = { graph: graphID } as GraphCreateRequestBody;
+  createGraph(graph: GraphCreatable): Promise<Graph> {
+    let requestBody = { graph } as GraphCreateRequestBody;
 
     return this._request("POST", "/graphs", requestBody);
   }
@@ -167,27 +202,43 @@ export default class BackendAPI {
 
   executeGraph(
     id: string,
+    version: number,
     inputData: { [key: string]: any } = {},
-  ): Promise<GraphExecuteResponse> {
-    return this._request("POST", `/graphs/${id}/execute`, inputData);
+  ): Promise<{ graph_exec_id: string }> {
+    return this._request("POST", `/graphs/${id}/execute/${version}`, inputData);
+  }
+
+  getExecutions(): Promise<GraphExecutionMeta[]> {
+    return this._get(`/executions`);
+  }
+
+  getGraphExecutions(graphID: string): Promise<GraphExecutionMeta[]> {
+    return this._get(`/graphs/${graphID}/executions`);
   }
 
   async getGraphExecutionInfo(
     graphID: string,
     runID: string,
-  ): Promise<NodeExecutionResult[]> {
-    return (await this._get(`/graphs/${graphID}/executions/${runID}`)).map(
+  ): Promise<GraphExecution> {
+    const result = await this._get(`/graphs/${graphID}/executions/${runID}`);
+    result.node_executions = result.node_executions.map(
       parseNodeExecutionResultTimestamps,
     );
+    return result;
   }
 
   async stopGraphExecution(
     graphID: string,
     runID: string,
-  ): Promise<NodeExecutionResult[]> {
-    return (
-      await this._request("POST", `/graphs/${graphID}/executions/${runID}/stop`)
-    ).map(parseNodeExecutionResultTimestamps);
+  ): Promise<GraphExecution> {
+    const result = await this._request(
+      "POST",
+      `/graphs/${graphID}/executions/${runID}/stop`,
+    );
+    result.node_executions = result.node_executions.map(
+      parseNodeExecutionResultTimestamps,
+    );
+    return result;
   }
 
   oAuthLogin(
@@ -427,7 +478,7 @@ export default class BackendAPI {
   /////////// V2 LIBRARY API //////////////
   /////////////////////////////////////////
 
-  async listLibraryAgents(): Promise<GraphMeta[]> {
+  async listLibraryAgents(): Promise<LibraryAgent[]> {
     return this._get("/library/agents");
   }
 
@@ -444,15 +495,19 @@ export default class BackendAPI {
   }
 
   async createSchedule(schedule: ScheduleCreatable): Promise<Schedule> {
-    return this._request("POST", `/schedules`, schedule);
+    return this._request("POST", `/schedules`, schedule).then(
+      parseScheduleTimestamp,
+    );
   }
 
-  async deleteSchedule(scheduleId: string): Promise<Schedule> {
+  async deleteSchedule(scheduleId: string): Promise<{ id: string }> {
     return this._request("DELETE", `/schedules/${scheduleId}`);
   }
 
   async listSchedules(): Promise<Schedule[]> {
-    return this._get(`/schedules`);
+    return this._get(`/schedules`).then((schedules) =>
+      schedules.map(parseScheduleTimestamp),
+    );
   }
 
   private async _uploadFile(path: string, file: File): Promise<string> {
@@ -739,8 +794,11 @@ export default class BackendAPI {
     return () => this.wsMessageHandlers[method].delete(handler);
   }
 
-  subscribeToExecution(graphId: string) {
-    this.sendWebSocketMessage("subscribe", { graph_id: graphId });
+  subscribeToExecution(graphId: string, graphVersion: number) {
+    this.sendWebSocketMessage("subscribe", {
+      graph_id: graphId,
+      graph_version: graphVersion,
+    });
   }
 }
 
@@ -751,7 +809,7 @@ type GraphCreateRequestBody = {
 };
 
 type WebsocketMessageTypeMap = {
-  subscribe: { graph_id: string };
+  subscribe: { graph_id: string; graph_version: number };
   execution_event: NodeExecutionResult;
   heartbeat: "ping" | "pong";
 };
@@ -779,5 +837,12 @@ function parseNodeExecutionResultTimestamps(result: any): NodeExecutionResult {
     queue_time: result.queue_time ? new Date(result.queue_time) : undefined,
     start_time: result.start_time ? new Date(result.start_time) : undefined,
     end_time: result.end_time ? new Date(result.end_time) : undefined,
+  };
+}
+
+function parseScheduleTimestamp(result: any): Schedule {
+  return {
+    ...result,
+    next_run_time: new Date(result.next_run_time),
   };
 }
